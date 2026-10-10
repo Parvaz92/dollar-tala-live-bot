@@ -21,7 +21,6 @@ load_dotenv()
 # ---------------- تنظیمات ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@dollar_tala_live").strip()
-API_KEY = os.getenv("BRSAPI_KEY", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "@dollar_tala_live_bot").strip()
 
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "15"))
@@ -31,30 +30,20 @@ QUIET_START_HOUR = int(os.getenv("QUIET_START_HOUR", "0"))
 QUIET_END_HOUR = int(os.getenv("QUIET_END_HOUR", "8"))
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Asia/Tehran"))
 
-# نماد هر قیمت در BrsApi : عنوان فارسی
-# اگر نمادی کار نکرد، با دستور  python bot.py --keys  نمادهای موجود را ببینید
+# نماد هر قیمت در api.priceto.day : عنوان فارسی
+# لیست همه‌ی نمادها: https://api.priceto.day/v1/symbols
 ITEMS = {
-    os.getenv("KEY_USD", "USD"): "💵 دلار",
-    os.getenv("KEY_EUR", "EUR"): "💶 یورو",
-    os.getenv("KEY_USDT", "USDT"): "🪙 تتر",
-    os.getenv("KEY_GOLD18", "IR_GOLD_18K"): "🟡 طلای ۱۸ عیار (گرم)",
-    os.getenv("KEY_SEKKEH", "IR_COIN_EMAMI"): "🏅 سکه امامی",
+    os.getenv("KEY_USD", "usd"): "💵 دلار",
+    os.getenv("KEY_EUR", "euro"): "💶 یورو",
+    os.getenv("KEY_USDT", "tether"): "🪙 تتر",
+    os.getenv("KEY_GOLD18", "gold-18k"): "🟡 طلای ۱۸ عیار (گرم)",
+    os.getenv("KEY_SEKKEH", "coin-emami"): "🏅 سکه امامی",
 }
 
-# چند آدرس امتحان می‌شود تا اولین آدرسی که جواب داد استفاده شود
-API_URLS = [
-    u for u in [
-        os.getenv("API_URL", "").strip(),
-        "https://BrsApi.ir/Api/Market/Gold_Currency.php",
-        "https://Api.BrsApi.ir/Api/Market/Gold_Currency.php",
-        "https://Api.BrsApi.ir/Market/Gold_Currency.php",
-    ] if u
-]
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept": "application/json",
-}
+# منبع قیمت: رایگان، بدون نیاز به کلید، از خارج ایران هم در دسترس است
+# قیمت‌ها به ریال برگردانده می‌شوند و ربات به تومان تبدیل می‌کند
+API_BASE = os.getenv("API_BASE", "https://api.priceto.day/v1/latest/irr").rstrip("/")
+HEADERS = {"User-Agent": "dollar-tala-live-bot", "Accept": "application/json"}
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
@@ -101,62 +90,26 @@ def is_quiet_hour(now: datetime) -> bool:
 
 
 # ---------------- دریافت قیمت ----------------
-def fetch_raw() -> dict:
-    """همه‌ی نمادها را به شکل {symbol: item} برمی‌گرداند"""
-    data = None
-    errors = []
-    for url in API_URLS:
-        try:
-            resp = requests.get(url, params={"key": API_KEY}, headers=HEADERS, timeout=20)
-        except requests.RequestException as e:
-            errors.append(f"{url} -> {e}")
-            continue
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-                break
-            except ValueError:
-                errors.append(f"{url} -> پاسخ JSON نبود: {resp.text[:200]}")
-        else:
-            errors.append(f"{url} -> HTTP {resp.status_code}: {resp.text[:200]}")
-    if data is None:
-        raise requests.RequestException("هیچ آدرس API جواب نداد:\n" + "\n".join(errors))
-    items = {}
-
-    def walk(node):
-        if isinstance(node, dict):
-            if "symbol" in node and "price" in node:
-                items[str(node["symbol"])] = node
-            else:
-                for v in node.values():
-                    walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-
-    walk(data)
-    return items
-
-
-def to_toman(item: dict) -> float:
-    value = float(str(item["price"]).replace(",", ""))
-    if "ریال" in str(item.get("unit", "")):
-        value /= 10
-    return value
+def fetch_one(symbol: str) -> float | None:
+    """قیمت یک نماد را به تومان برمی‌گرداند"""
+    try:
+        resp = requests.get(f"{API_BASE}/{symbol}", headers=HEADERS, timeout=20)
+        data = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        log.warning("دریافت %s ناموفق: %s", symbol, e)
+        return None
+    if resp.status_code != 200 or not data.get("success") or not data.get("price"):
+        log.warning("پاسخ نامعتبر برای %s: HTTP %s %s", symbol, resp.status_code, str(data)[:200])
+        return None
+    return float(data["price"]) / 10  # ریال به تومان
 
 
 def fetch_prices() -> dict:
-    raw = fetch_raw()
     prices = {}
     for key in ITEMS:
-        item = raw.get(key)
-        if not item:
-            log.warning("نماد %s در پاسخ API نبود. نمادهای موجود: %s", key, ", ".join(raw))
-            continue
-        try:
-            prices[key] = to_toman(item)
-        except (KeyError, ValueError, TypeError):
-            log.warning("مقدار نماد %s قابل خواندن نبود: %s", key, item)
+        value = fetch_one(key)
+        if value:
+            prices[key] = value
     return prices
 
 
@@ -259,7 +212,7 @@ def tick(state: dict) -> None:
 
 
 def check_config() -> None:
-    missing = [n for n, v in [("BOT_TOKEN", BOT_TOKEN), ("BRSAPI_KEY", API_KEY)] if not v]
+    missing = [n for n, v in [("BOT_TOKEN", BOT_TOKEN)] if not v]
     if missing:
         raise SystemExit(f"این مقادیر خالی است (فایل .env یا Secrets گیت‌هاب): {', '.join(missing)}")
 
@@ -270,9 +223,8 @@ def main() -> None:
     check_config()
 
     if "--keys" in sys.argv:
-        raw = fetch_raw()
-        for k, v in raw.items():
-            print(k, "=>", v.get("name"), v.get("price"), v.get("unit"))
+        for k, title in ITEMS.items():
+            print(k, "=>", title, fetch_one(k))
         return
 
     if "--once" in sys.argv:
