@@ -2,7 +2,7 @@
 ربات پست اتوماتیک قیمت دلار، طلا، سکه و تتر در کانال تلگرام
 Dollar / Gold price auto-poster for a Telegram channel.
 
-- هر ساعت یک پست منظم (به جز ساعات سکوت شب)
+- هر POST_INTERVAL_MINUTES دقیقه یک پست منظم، اگر قیمتی عوض شده باشد (به جز ساعات سکوت شب)
 - پست فوری وقتی قیمتی بیشتر از ALERT_PERCENT درصد نسبت به آخرین پست تغییر کند
 """
 
@@ -25,7 +25,9 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "@dollar_tala_live_bot").strip()
 # وقتی بخش هشدار شخصی ساخته شد، این را 1 کنید تا لینک ربات زیر پست‌ها بیاید
 SHOW_BOT_LINK = os.getenv("SHOW_BOT_LINK", "0").strip() == "1"
 
-CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "15"))
+CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "5"))
+# هر چند دقیقه یک پست منظم (فقط اگر قیمتی عوض شده باشد)
+POST_INTERVAL_MINUTES = int(os.getenv("POST_INTERVAL_MINUTES", "15"))
 ALERT_PERCENT = float(os.getenv("ALERT_PERCENT", "1.0"))
 ALERT_COOLDOWN_MINUTES = int(os.getenv("ALERT_COOLDOWN_MINUTES", "30"))
 QUIET_START_HOUR = int(os.getenv("QUIET_START_HOUR", "0"))
@@ -79,7 +81,7 @@ def load_state() -> dict:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             log.warning("state.json خراب بود، از نو ساخته می‌شود")
-    return {"last_prices": {}, "last_hourly": "", "last_alert_ts": 0}
+    return {"last_prices": {}, "last_post_ts": 0, "last_alert_ts": 0}
 
 
 def save_state(state: dict) -> None:
@@ -208,23 +210,26 @@ def tick(state: dict) -> None:
         if old and abs(value - old) / old * 100 >= ALERT_PERCENT:
             movers.append(key)
 
-    cooldown_ok = time.time() - state.get("last_alert_ts", 0) >= ALERT_COOLDOWN_MINUTES * 60
-    hour_key = now.strftime("%Y-%m-%d %H")
-    hourly_due = state.get("last_hourly") != hour_key and not is_quiet_hour(now)
+    now_ts = time.time()
+    cooldown_ok = now_ts - state.get("last_alert_ts", 0) >= ALERT_COOLDOWN_MINUTES * 60
+    # یک دقیقه تلورانس برای تأخیر زمان‌بندی گیت‌هاب
+    interval_ok = now_ts - state.get("last_post_ts", 0) >= (POST_INTERVAL_MINUTES - 1) * 60
+    changed = any(round(prices[k]) != round(last.get(k, 0)) for k in prices)
+    regular_due = interval_ok and changed and not is_quiet_hour(now)
 
     if movers and cooldown_ok:
         if send_message(build_message(prices, last, urgent=True, movers=movers)):
             log.info("پست فوری ارسال شد: %s", movers)
-            state["last_alert_ts"] = time.time()
+            state["last_alert_ts"] = now_ts
+            state["last_post_ts"] = now_ts
             state["last_prices"] = prices
-            state["last_hourly"] = hour_key
-    elif hourly_due:
+    elif regular_due:
         if send_message(build_message(prices, last, urgent=False, movers=[])):
-            log.info("پست ساعتی ارسال شد")
+            log.info("پست منظم ارسال شد")
+            state["last_post_ts"] = now_ts
             state["last_prices"] = prices
-            state["last_hourly"] = hour_key
     else:
-        log.info("چیزی برای ارسال نیست")
+        log.info("چیزی برای ارسال نیست (قیمت ثابت یا هنوز وقت پست نشده)")
 
     # اولین اجرا: قیمت‌ها را به عنوان مبنا ذخیره کن
     if not state.get("last_prices"):
