@@ -225,6 +225,12 @@ def main() -> None:
             print(k, "=>", v)
         return
 
+    if "--once" in sys.argv:
+        # برای GitHub Actions: یک بار چک کن و خارج شو
+        state = load_state()
+        tick(state)
+        return
+
     if "--test" in sys.argv:
         prices = fetch_prices()
         ok = send_message(build_message(prices, {}, urgent=False, movers=[]))
