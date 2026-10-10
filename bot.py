@@ -41,8 +41,20 @@ ITEMS = {
     os.getenv("KEY_SEKKEH", "IR_COIN_EMAMI"): "🏅 سکه امامی",
 }
 
-API_URL = "https://Api.BrsApi.ir/Market/Gold_Currency.php"
-HEADERS = {"User-Agent": "Mozilla/5.0 (dollar-tala-live-bot)", "Accept": "application/json"}
+# چند آدرس امتحان می‌شود تا اولین آدرسی که جواب داد استفاده شود
+API_URLS = [
+    u for u in [
+        os.getenv("API_URL", "").strip(),
+        "https://BrsApi.ir/Api/Market/Gold_Currency.php",
+        "https://Api.BrsApi.ir/Api/Market/Gold_Currency.php",
+        "https://Api.BrsApi.ir/Market/Gold_Currency.php",
+    ] if u
+]
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/json",
+}
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
@@ -91,9 +103,24 @@ def is_quiet_hour(now: datetime) -> bool:
 # ---------------- دریافت قیمت ----------------
 def fetch_raw() -> dict:
     """همه‌ی نمادها را به شکل {symbol: item} برمی‌گرداند"""
-    resp = requests.get(API_URL, params={"key": API_KEY}, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    data = resp.json()
+    data = None
+    errors = []
+    for url in API_URLS:
+        try:
+            resp = requests.get(url, params={"key": API_KEY}, headers=HEADERS, timeout=20)
+        except requests.RequestException as e:
+            errors.append(f"{url} -> {e}")
+            continue
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                break
+            except ValueError:
+                errors.append(f"{url} -> پاسخ JSON نبود: {resp.text[:200]}")
+        else:
+            errors.append(f"{url} -> HTTP {resp.status_code}: {resp.text[:200]}")
+    if data is None:
+        raise requests.RequestException("هیچ آدرس API جواب نداد:\n" + "\n".join(errors))
     items = {}
 
     def walk(node):
