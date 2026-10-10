@@ -46,6 +46,10 @@ ITEMS = {
 # قیمت‌ها به ریال برگردانده می‌شوند و ربات به تومان تبدیل می‌کند
 API_BASE = os.getenv("API_BASE", "https://api.priceto.day/v1/latest/irr").rstrip("/")
 HEADERS = {"User-Agent": "dollar-tala-live-bot", "Accept": "application/json"}
+
+# قیمت لحظه‌ای تتر از صرافی والکس (به تومان)
+WALLEX_URL = "https://api.wallex.ir/v1/markets"
+WALLEX_SYMBOL = os.getenv("WALLEX_SYMBOL", "USDTTMN")
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
@@ -106,10 +110,25 @@ def fetch_one(symbol: str) -> float | None:
     return float(data["price"]) / 10  # ریال به تومان
 
 
+def fetch_tether_live() -> float | None:
+    """قیمت لحظه‌ای تتر از والکس (تومان)"""
+    try:
+        resp = requests.get(WALLEX_URL, headers=HEADERS, timeout=20)
+        stats = resp.json()["result"]["symbols"][WALLEX_SYMBOL]["stats"]
+        value = float(stats["lastPrice"])
+        return value if value > 0 else None
+    except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+        log.warning("دریافت تتر از والکس ناموفق، از منبع دوم استفاده می‌شود: %s", e)
+        return None
+
+
 def fetch_prices() -> dict:
     prices = {}
+    tether_key = os.getenv("KEY_USDT", "tether")
     for key in ITEMS:
-        value = fetch_one(key)
+        value = fetch_tether_live() if key == tether_key else None
+        if not value:
+            value = fetch_one(key)
         if value:
             prices[key] = value
     return prices
