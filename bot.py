@@ -21,7 +21,7 @@ load_dotenv()
 # ---------------- تنظیمات ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@dollar_tala_live").strip()
-NAVASAN_API_KEY = os.getenv("NAVASAN_API_KEY", "").strip()
+API_KEY = os.getenv("BRSAPI_KEY", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "@dollar_tala_live_bot").strip()
 
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "15"))
@@ -31,17 +31,18 @@ QUIET_START_HOUR = int(os.getenv("QUIET_START_HOUR", "0"))
 QUIET_END_HOUR = int(os.getenv("QUIET_END_HOUR", "8"))
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Asia/Tehran"))
 
-# کلید هر قیمت در API نوسان : عنوان فارسی
-# اگر کلیدی کار نکرد، با دستور  python bot.py --keys  کلیدهای موجود را ببینید
+# نماد هر قیمت در BrsApi : عنوان فارسی
+# اگر نمادی کار نکرد، با دستور  python bot.py --keys  نمادهای موجود را ببینید
 ITEMS = {
-    os.getenv("KEY_USD", "usd_sell"): "💵 دلار",
-    os.getenv("KEY_EUR", "eur"): "💶 یورو",
-    os.getenv("KEY_USDT", "usdt"): "🪙 تتر",
-    os.getenv("KEY_GOLD18", "18ayar"): "🟡 طلای ۱۸ عیار (گرم)",
-    os.getenv("KEY_SEKKEH", "sekkeh"): "🏅 سکه امامی",
+    os.getenv("KEY_USD", "USD"): "💵 دلار",
+    os.getenv("KEY_EUR", "EUR"): "💶 یورو",
+    os.getenv("KEY_USDT", "USDT"): "🪙 تتر",
+    os.getenv("KEY_GOLD18", "IR_GOLD_18K"): "🟡 طلای ۱۸ عیار (گرم)",
+    os.getenv("KEY_SEKKEH", "IR_COIN_EMAMI"): "🏅 سکه امامی",
 }
 
-NAVASAN_URL = "http://api.navasan.tech/latest/"
+API_URL = "https://Api.BrsApi.ir/Market/Gold_Currency.php"
+HEADERS = {"User-Agent": "Mozilla/5.0 (dollar-tala-live-bot)", "Accept": "application/json"}
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
@@ -89,9 +90,32 @@ def is_quiet_hour(now: datetime) -> bool:
 
 # ---------------- دریافت قیمت ----------------
 def fetch_raw() -> dict:
-    resp = requests.get(NAVASAN_URL, params={"api_key": NAVASAN_API_KEY}, timeout=20)
+    """همه‌ی نمادها را به شکل {symbol: item} برمی‌گرداند"""
+    resp = requests.get(API_URL, params={"key": API_KEY}, headers=HEADERS, timeout=20)
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    items = {}
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "symbol" in node and "price" in node:
+                items[str(node["symbol"])] = node
+            else:
+                for v in node.values():
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(data)
+    return items
+
+
+def to_toman(item: dict) -> float:
+    value = float(str(item["price"]).replace(",", ""))
+    if "ریال" in str(item.get("unit", "")):
+        value /= 10
+    return value
 
 
 def fetch_prices() -> dict:
@@ -100,13 +124,12 @@ def fetch_prices() -> dict:
     for key in ITEMS:
         item = raw.get(key)
         if not item:
-            log.warning("کلید %s در پاسخ API نبود", key)
+            log.warning("نماد %s در پاسخ API نبود. نمادهای موجود: %s", key, ", ".join(raw))
             continue
         try:
-            value = item["value"] if isinstance(item, dict) else item
-            prices[key] = float(str(value).replace(",", ""))
+            prices[key] = to_toman(item)
         except (KeyError, ValueError, TypeError):
-            log.warning("مقدار کلید %s قابل خواندن نبود: %s", key, item)
+            log.warning("مقدار نماد %s قابل خواندن نبود: %s", key, item)
     return prices
 
 
@@ -209,9 +232,9 @@ def tick(state: dict) -> None:
 
 
 def check_config() -> None:
-    missing = [n for n, v in [("BOT_TOKEN", BOT_TOKEN), ("NAVASAN_API_KEY", NAVASAN_API_KEY)] if not v]
+    missing = [n for n, v in [("BOT_TOKEN", BOT_TOKEN), ("BRSAPI_KEY", API_KEY)] if not v]
     if missing:
-        raise SystemExit(f"این مقادیر در فایل .env خالی است: {', '.join(missing)}")
+        raise SystemExit(f"این مقادیر خالی است (فایل .env یا Secrets گیت‌هاب): {', '.join(missing)}")
 
 
 def main() -> None:
@@ -222,7 +245,7 @@ def main() -> None:
     if "--keys" in sys.argv:
         raw = fetch_raw()
         for k, v in raw.items():
-            print(k, "=>", v)
+            print(k, "=>", v.get("name"), v.get("price"), v.get("unit"))
         return
 
     if "--once" in sys.argv:

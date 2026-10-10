@@ -33,7 +33,7 @@ jobs:
       - name: Run bot once
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          NAVASAN_API_KEY: ${{ secrets.NAVASAN_API_KEY }}
+          BRSAPI_KEY: ${{ secrets.BRSAPI_KEY }}
         run: python bot.py --once
 
       - name: Save state
