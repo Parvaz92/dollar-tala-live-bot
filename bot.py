@@ -22,6 +22,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@dollar_tala_live").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "@dollar_tala_live_bot").strip()
+# وقتی بخش هشدار شخصی ساخته شد، این را 1 کنید تا لینک ربات زیر پست‌ها بیاید
+SHOW_BOT_LINK = os.getenv("SHOW_BOT_LINK", "0").strip() == "1"
 
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "15"))
 ALERT_PERCENT = float(os.getenv("ALERT_PERCENT", "1.0"))
@@ -142,7 +144,8 @@ def build_message(prices: dict, last: dict, urgent: bool, movers: list[str]) -> 
             f"{change_text(prices[key], last.get(key))}"
         )
     lines.append("")
-    lines.append(f"🔔 هشدار قیمت شخصی: {BOT_USERNAME}")
+    if SHOW_BOT_LINK:
+        lines.append(f"🔔 هشدار قیمت شخصی: {BOT_USERNAME}")
     lines.append(f"📢 {CHANNEL_ID}")
     return "\n".join(lines)
 
